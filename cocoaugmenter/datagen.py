@@ -1,7 +1,6 @@
 from __future__ import absolute_import
 from __future__ import print_function
 
-#import pkg_resources
 import os, math
 import numpy as np
 import cv2
@@ -168,22 +167,4 @@ class CocoDataGen():
         RoiMaskTensor = RoiMaskTensor.astype(np.float32)
         # Decided to exclude the meta-data info since it's not consistent or accurate anyway.
         return RoiTensor, RoiMaskTensor, None
-
-"""
-if __name__ == "__main__":
-    dataDir = '/media/ryan/engrams/data/COCO' # You'll want to change this path. TODO
-    dataGen = CocoDataGen(dataDir   = dataDir,
-                          classGrps = [['person'], ['car', 'truck', 'bus']],
-                          grpProbs  = [0.5, 0.5])
-    if not os.path.exists('augmented_samples'):
-        os.makedirs('augmented_samples')
-    for idx in range(10): # generate 10 random images.
-        print('sample', idx)
-        imgTensor, segTensor, metadata = dataGen.sample()
-        imgcv2 = (imgTensor*255.0).astype(np.uint8)
-        cv2.imwrite('augmented_samples/sample_img'+str(idx)+'.jpg', imgcv2)
-        for cnl_idx in range(segTensor.shape[2]):
-            imgcv2 = segTensor[:,:,cnl_idx].reshape(segTensor.shape[0:2]).astype(np.uint8)*255
-            cv2.imwrite('augmented_samples/sample_img'+str(idx)+'_'+str(cnl_idx)+'.jpg', imgcv2)
-"""
                                                                                                                                      
