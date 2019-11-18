@@ -1,6 +1,6 @@
 from __future__ import print_function
 
-import os
+import os, time
 import numpy as np
 import cv2
 
@@ -28,9 +28,20 @@ if not os.path.exists('augmented_samples'):
 # Generate random images according to the defined class group distribution
 for idx in range(num_samples):
     print('sample', idx)
-    imgTensor, segTensor, metadata = dataGen.sample()
+    imgTensor, segTensor, metadata = dataGen.sample(targetWidth=128)
     imgcv2 = (imgTensor*255.0).astype(np.uint8)
     cv2.imwrite('augmented_samples/sample_img'+str(idx)+'.jpg', imgcv2)
     for cnl_idx in range(segTensor.shape[2]):
         imgcv2 = segTensor[:,:,cnl_idx].reshape(segTensor.shape[0:2]).astype(np.uint8)*255
         cv2.imwrite('augmented_samples/sample_img'+str(idx)+'_'+str(cnl_idx)+'.jpg', imgcv2)
+
+# Profile performance
+times = []
+for idx in range(100):
+    start_ts = time.time()
+    print('sample', idx)
+    imgTensor, segTensor, metadata = dataGen.sample(targetWidth=128)
+    times.append(time.time() - start_ts)
+
+print('median sample time:', np.median(times))
+print('median samples/sec:', 1.0/np.median(times))

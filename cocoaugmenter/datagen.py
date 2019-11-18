@@ -8,17 +8,73 @@ from pycocotools.coco import COCO
 import pycocotools.mask as maskUtils
 
 
+# Note: Turns out loading cached masks from disk is slower than generating them on-the-fly.
+# So this function is basically useless. TODO
+def _cacheMaskImgs(dataDir, 
+                   classGrps, 
+                   training, 
+                   cocoObj = None):
+    """ Caches mask images for each class group given in ``classGrps``.
+        Generally speeds up CocoDataGen.sample().
+        Mask images are stored in folders created in dataDir.
+
+        # Params
+            dataDir: Root directory of coco dataset.
+            classGrps: List of lists of strings specifying object classes.
+                Each list of classes will be grouped together into one mask image.
+            training: If ``True`` then uses training set, otherwise uses validation set.
+            cocoObj: Provides option to pass a pre-existing coco dataset object.
+    """
+    if cocoObj:
+        coco = cocoObj
+    else:
+        annPath = '{}/annotations/instances_{}.json'.format(dataDir, 'train2017' if training else 'val2017')
+        coco = COCO(annPath)
+    # Get image ids by class group
+    catIdsByGrp = [coco.getCatIds(catNms=catNms) for catNms in classGrps]
+    imgIdsByGrp = []
+    for grpIdx, catIds in enumerate(catIdsByGrp):
+        imgIds = []
+        for catId in catIds:
+            imgIds.extend(coco.getImgIds(catIds=[catId]))
+        imgIdsByGrp.append(list(set(imgIds)))
+    for grp_idx in range(len(classGrps)):
+        folder_name = '_'.join(classGrps[grp_idx]) + ('_train' if training else '_val')
+        cache_path = os.path.join(dataDir, folder_name)
+        if not os.path.exists(cache_path):
+            os.makedirs(cache_path)
+        for img_id in imgIdsByGrp[grp_idx]:
+            img_info = coco.loadImgs([img_id])[0]
+            fname_mask = str(img_id).zfill(12)+'.jpg'
+            mask_path = os.path.join(cache_path, fname_mask)
+            if not os.path.exists(mask_path): 
+                ann_ids = coco.getAnnIds(imgIds=img_id, catIds=catIdsByGrp[grp_idx], iscrowd=False) # Not sure about the iscrowd param TODO
+                anns = coco.loadAnns(ann_ids)
+                # create an empty mask image
+                mask_composite = np.zeros(shape=(img_info['height'], img_info['width']), dtype=np.uint8)
+                for ann in anns: # render mask of each ann and add it to the composite image
+                    ann_mask = maskUtils.decode(coco.annToRLE(ann))  # get the contours and mask of this instance.
+                    mask_composite = np.maximum(mask_composite, ann_mask)
+                mask_composite *= 255
+                cv2.imwrite(mask_path, mask_composite) # save the composite image
+
+
 class CocoDataGen():
 
     def __init__(self, 
-                 dataDir   = '/media/ryan/engrams/data/COCO',
-                 classGrps = [['person'], ['car', 'truck', 'bus']],
-                 grpProbs  = [0.5, 0.5]):
+                 dataDir, 
+                 classGrps, 
+                 grpProbs, 
+                 cacheMaskImgs=False):
         annPathTrain   = '{}/annotations/instances_{}.json'.format(dataDir, 'train2017')
         annPathVal     = '{}/annotations/instances_{}.json'.format(dataDir, 'val2017')
         self.dataDir   = dataDir
         self.cocoTrain = COCO(annPathTrain)
         self.cocoVal   = COCO(annPathVal) # Need to do this for validation too. TODO
+        self.cacheMaskImgs = cacheMaskImgs
+        if self.cacheMaskImgs:
+            _cacheMaskImgs(dataDir, classGrps, True, self.cocoTrain)
+            _cacheMaskImgs(dataDir, classGrps, False, self.cocoVal)
         self.classGrps = classGrps
         self.grpProbs  = grpProbs
         self.catIdsByGrp = [self.cocoTrain.getCatIds(catNms=catNms) for catNms in classGrps]
@@ -118,30 +174,44 @@ class CocoDataGen():
             width = int(width/zoom)
             sx, sy = cx-int(width/2.0), cy-int(width/2.0) # square bounding box x and y, width is also the height.
             sx, sy = max(sx, 0), max(sy, 0) # make sure the upper left corner of the box hasn't gone off the image.
-        # Find set of instances which have bounding rectangles that overlap with bounding box of reference instance:
-        annsByGrp = [cocoObj.loadAnns(grpAnnIds) for grpAnnIds in annIdsByGrp]
-        overlappingAnnsByGrp = []
-        for grpIdx, grpAnns in enumerate(annsByGrp):
-            overlappingAnns = []
-            for ann in grpAnns:
-                rle_ = cocoObj.annToRLE(ann)  # get the contours of this instance.
-                (x_, y_, w_, h_) = maskUtils.toBbox(rle_)
-                x_overlap = (x_ >= sx and x_ <= sx + width) or (sx >= x_ and sx <= x_ + w_)
-                y_overlap = (y_ >= sy and y_ <= sy + width) or (sy >= y_ and sy <= y_ + h_)
-                if x_overlap and y_overlap: # if overlap:
-                    overlappingAnns.append(ann)
-                    # Note: It's okay if it's the refAnn, since that overlaps with itself.
-            overlappingAnnsByGrp.append(overlappingAnns)
-        # Render masks for all instances in the aft-mentioned set:
-        maskTensor = np.zeros(shape=(imgInfo['height'], imgInfo['width'], len(self.catIdsByGrp)), dtype=np.uint8)
-        for grpIdx, grpAnns in enumerate(overlappingAnnsByGrp):
-            # render mask and binary_or add it to the correct maskTensor channel.
-            for ann in grpAnns:
-                #print('adding instance to group', grpIdx)
-                annMask = maskUtils.decode(cocoObj.annToRLE(ann))  # get the contours and mask of this instance.
-                #maskTensor[:,:,grpIdx] = np.bitwise_or(maskTensor[:,:,grpIdx], annMask)
-                maskTensor[:,:,grpIdx] = np.maximum(maskTensor[:,:,grpIdx], annMask) # add instance mask to appropriate channel.
-                # ^^^ Consider memoization to speed this up. TODO
+        if not self.cacheMaskImgs:
+            # Find set of instances which have bounding rectangles that overlap with bounding box of reference instance:
+            annsByGrp = [cocoObj.loadAnns(grpAnnIds) for grpAnnIds in annIdsByGrp]
+            overlappingAnnsByGrp = []
+            for grpIdx, grpAnns in enumerate(annsByGrp):
+                overlappingAnns = []
+                for ann in grpAnns:
+                    rle_ = cocoObj.annToRLE(ann)  # get the contours of this instance.
+                    (x_, y_, w_, h_) = maskUtils.toBbox(rle_)
+                    x_overlap = (x_ >= sx and x_ <= sx + width) or (sx >= x_ and sx <= x_ + w_)
+                    y_overlap = (y_ >= sy and y_ <= sy + width) or (sy >= y_ and sy <= y_ + h_)
+                    if x_overlap and y_overlap: # if overlap:
+                        overlappingAnns.append(ann)
+                        # Note: It's okay if it's the refAnn, since that overlaps with itself.
+                overlappingAnnsByGrp.append(overlappingAnns)
+            # Render masks for all instances in the aft-mentioned set:
+            maskTensor = np.zeros(shape=(imgInfo['height'], imgInfo['width'], len(self.catIdsByGrp)), dtype=np.uint8)
+            for grpIdx, grpAnns in enumerate(overlappingAnnsByGrp):
+                # render mask and binary_or add it to the correct maskTensor channel.
+                for ann in grpAnns:
+                    #print('adding instance to group', grpIdx)
+                    annMask = maskUtils.decode(cocoObj.annToRLE(ann))  # get the contours and mask of this instance.
+                    #maskTensor[:,:,grpIdx] = np.bitwise_or(maskTensor[:,:,grpIdx], annMask)
+                    maskTensor[:,:,grpIdx] = np.maximum(maskTensor[:,:,grpIdx], annMask) # add instance mask to appropriate channel.
+                    # ^^^ Consider memoization to speed this up. TODO
+        else: # load mask images from files instead
+            maskTensor = np.zeros(shape=(imgInfo['height'], imgInfo['width'], len(self.catIdsByGrp)), dtype=np.uint8)
+            for grpIdx, classNames in enumerate(self.classGrps):
+                folder_name = '_'.join(classNames) + ('_train' if training else '_val')
+                cache_path = os.path.join(self.dataDir, folder_name)
+                fname_mask = str(imgId).zfill(12)+'.jpg'
+                mask_path = os.path.join(cache_path, fname_mask)
+                if os.path.exists(mask_path):
+                    try:
+                        maskTensor[:,:,grpIdx] = cv2.imread(mask_path, False)[:,:]
+                    except:
+                        print('Error reading mask image:', mask_path)
+            maskTensor = np.clip(maskTensor/100, 0, 1)
         # Load the image:
         fname   = imgInfo['file_name']
         imgsDir = '{}/images/{}'.format(self.dataDir, 'train2017' if training else 'val2017')
@@ -152,18 +222,19 @@ class CocoDataGen():
         # Crop out the corresponding region in the mask tensor:
         RoiMaskTensor = maskTensor[sy:sy+width, sx:sx+width, :]
         # Resize the roi and masks:
-        if sy+width > imgInfo['height'] or sx+width > imgInfo['width']:
-            imgRoiResized = self._resize_pad(imgRoi, targetWidth)
-            RoiMaskTensor = self._resize_pad(RoiMaskTensor, targetWidth)
-        else:
-            imgRoiResized = cv2.resize(imgRoi, (targetWidth, targetWidth))
-            RoiMaskTensor = cv2.resize(RoiMaskTensor, (targetWidth, targetWidth))
+        if not (targetWidth is None):
+            if sy+width > imgInfo['height'] or sx+width > imgInfo['width']:
+                imgRoi = self._resize_pad(imgRoi, targetWidth)
+                RoiMaskTensor = self._resize_pad(RoiMaskTensor, targetWidth)
+            else:
+                imgRoi = cv2.resize(imgRoi, (targetWidth, targetWidth))
+                RoiMaskTensor = cv2.resize(RoiMaskTensor, (targetWidth, targetWidth))
         # Randomly mirror if enabled:
         if horizontalFlip and np.random.random() > 0.5:
             #print('flip.')
-            imgRoiResized = cv2.flip(imgRoiResized, 1)
+            imgRoi = cv2.flip(imgRoi, 1)
             RoiMaskTensor = cv2.flip(RoiMaskTensor, 1)
-        RoiTensor = imgRoiResized.astype(np.float32) / 255.0
+        RoiTensor = imgRoi.astype(np.float32) / 255.0
         RoiMaskTensor = RoiMaskTensor.astype(np.float32)
         # Decided to exclude the meta-data info since it's not consistent or accurate anyway.
         return RoiTensor, RoiMaskTensor, None
