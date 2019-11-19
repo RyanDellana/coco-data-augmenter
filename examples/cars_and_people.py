@@ -17,6 +17,8 @@ classGroups = [['person'],
 groupProbabilities = [0.5, 0.5] # Define sampling probabilities for class groups
 num_samples = 20 # Number of random samples to take for this example
 
+np.random.seed(42)
+
 dataGen = CocoDataGen(dataDir   = dataDir,
                       classGrps = classGroups,
                       grpProbs  = groupProbabilities)

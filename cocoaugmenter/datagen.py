@@ -79,11 +79,15 @@ class CocoDataGen():
         self.grpProbs  = grpProbs
         self.catIdsByGrp = [self.cocoTrain.getCatIds(catNms=catNms) for catNms in classGrps]
         self.imgIdsByGrp = []
+        self.imgIdsByGrpVal = []
         for grpIdx, catIds in enumerate(self.catIdsByGrp):
             imgIds = []
+            imgIdsVal = []
             for catId in catIds:
                 imgIds.extend(self.cocoTrain.getImgIds(catIds=[catId]))
+                imgIdsVal.extend(self.cocoVal.getImgIds(catIds=[catId]))
             self.imgIdsByGrp.append(list(set(imgIds)))
+            self.imgIdsByGrpVal.append(list(set(imgIdsVal)))
 
     def _resize_pad(self, img, dim, interp=None):
         h, w = img.shape[0:2]
@@ -125,7 +129,10 @@ class CocoDataGen():
             # Pick a reference class group according the the probabilities.
             classGrpIdx = np.random.choice(a=len(self.catIdsByGrp), p=self.grpProbs)
             # pick an imageID from the set of images containing class instances of the selected class group.
-            classGrpImgIds = self.imgIdsByGrp[classGrpIdx]
+            if training:
+                classGrpImgIds = self.imgIdsByGrp[classGrpIdx]
+            else:
+                classGrpImgIds = self.imgIdsByGrpVal[classGrpIdx]
             imgId = np.random.choice(classGrpImgIds)
             # get annotation IDs of all instances of classes in chosen group found in the image.
             annIdsByGrp = []
