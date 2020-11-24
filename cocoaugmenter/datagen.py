@@ -98,7 +98,7 @@ class CocoDataGen():
             img_resized = cv2.resize(img, (w_, h_))
         else:
             img_resized = cv2.resize(img, (w_, h_), interpolation=interp)
-        img_zeros[(dim-h_)/2:(dim-h_)/2+h_, (dim-w_)/2:(dim-w_)/2+w_] = img_resized[:,:]
+        img_zeros[(dim-h_)//2:(dim-h_)//2+h_, (dim-w_)//2:(dim-w_)//2+w_] = img_resized[:,:]
         return img_zeros
     
     def _map(self, x, in_min, in_max, out_min, out_max):
